@@ -1,0 +1,399 @@
+---
+title: 'Assignment 1: Dianna McAllister'
+output:
+  html_document:
+    df_print: paged
+---
+
+The Expression Dataset I chose was [GSE66306: Impact of bariatric surgery on RNA-seq gene expression profiles of peripheral monocytes in humans](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE66306).
+
+## About the Dataset
+**Summary**
+Genome expression profiles were taken from obese women before, and three months after bariatric surgery.
+
+**Control and Test Conditions**
+The conditions that were tested were:
+* Before bariatric surgery (T0)
+* 3 months after bariatric surgery (T3)
+
+**Why I was Interested**
+I have always been interested in health, and maintaining a healthy lifestyle. I always knew being healthy (whether that means eating healthily or being active / working out) had amazing benefits on your physical, mental, and emotional health. So a study that focused on health, and how a procedure like bariatric surgery can improve someone's physical health, which hopefully leads to improving their physical, mental, and emotional health.
+
+## Clean the Data and Map to HUGO Symbols
+
+**Download the data**
+First, get all depencies and packages necessary to complete all tasks.
+```{r results = FALSE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+if (!requireNamespace("GEOmetadb", quietly = TRUE))
+    BiocManager::install("GEOmetadb")
+if (!requireNamespace("kableExtra", quietly = TRUE))
+    BiocManager::install("kableExtra")
+if (!requireNamespace("gridExtra", quietly = TRUE))
+    install.packages("gridExtra")
+if (!requireNamespace("org.Hs.eg.db", quietly = TRUE))
+    BiocManager::install("org.Hs.eg.db")
+if (!requireNamespace("knitr", quietly = TRUE))
+    install.packages("knitr")
+if (!requireNamespace("biomaRt", quietly = TRUE))
+    BiocManager::install("biomaRt")
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+library(GEOmetadb)
+library(biomaRt)
+library(org.Hs.eg.db)
+```
+
+**Learn more about my dataset and it's platform**
+
+Get the description of my dataset:
+```{r results = FALSE}
+gse <- getGEO("GSE66306",GSEMatrix=FALSE)
+```
+
+Look at details about my dataset:
+```{r echo = FALSE, results = TRUE}
+data.frame(head(Meta(gse)))
+```
+
+Look at details about the platform my dataset uses:
+
+```{r echo = FALSE, results = FALSE}
+current_gpl <- names(GPLList(gse))[1]
+current_gpl_info <- Meta(getGEO(current_gpl))
+```
+**Name of Platform:** `r current_gpl_info$title`
+
+**Submission Data Date:** `r current_gpl_info$submission_date`
+
+**Last Date Data was Updated:** `r current_gpl_info$last_update_date`
+
+**Organisms Included in Platform:** `r current_gpl_info$organism`
+
+**Amount of GEO datsets that use this Platform:** `r length(current_gpl_info$series_id)`
+
+**Amount of GEO samples that use this Platform:** `length(current_gpl_info$sample_id)`
+
+**Downloading the Dataset and initial previewing**
+
+Now that we have looked into information about the dataset, let's download my dataset!
+```{r results = FALSE}
+sfiles = getGEOSuppFiles('GSE66306')
+fnames = rownames(sfiles)
+PM_exp = read.delim(fnames[1],header=TRUE,
+                       check.names = FALSE, stringsAsFactors = FALSE)
+```
+Let's first find out the dimensions of my dataset: `r dim(PM_exp)`
+
+This indicates that there are 23354 rows and 40 columns!
+
+Let's take a quick look at what the first few rows and columns of my data looks like:
+```{r echo = FALSE}
+PM_exp[1:5,1:6]
+```
+
+A quick summary of what I observed about my dataset:
+* There are 23354 genes (unsure about duplicates just yet!)
+* There are gene names, Ensemble gene IDs, and 12 different test cases (two situations per gene)
+* Not all genes have Ensembl gene IDs
+* The gene names used are either the [HUGO](https://www.genenames.org/) approved symbol or an alias symbol
+
+**Organize the dataset into patient IDs and cell types**
+
+Before doing further analysis of the dataset, I first want to create a table that lists all patients and easily displays the patient ID as well as the specific cell type analyzed.
+```{r echo = FALSE, results = TRUE}
+samples <- data.frame(lapply(colnames(PM_exp)[3:40],
+                            FUN=function(x){unlist(strsplit(x, split = "_"))[c(1,2)]}))
+colnames(samples) <- colnames(PM_exp)[3:40]
+rownames(samples) <- c("patients","time")
+samples <- data.frame(t(samples))
+samples[1:10,]
+```
+
+**Filter weakly expressed features from my dataset**
+
+Now, back to my dataset. I want to filter out weakly expressed features, using edgeR:
+```{r echo = FALSE}
+if (!requireNamespace("edgeR", quietly = TRUE))
+    BiocManager::install("edgeR")
+library(edgeR)
+cpms = cpm(PM_exp[,3:40])
+rownames(cpms) <- PM_exp[,1]
+keep = rowSums(cpms >1) >=3
+PM_exp_filtered = PM_exp[keep,]
+```
+The filtered dimesions of the dataset now are: `r dim(PM_exp_filtered)`.
+
+This means that `r dim(PM_exp)[1] -  dim(PM_exp_filtered)[1]` genes were removed. That means there were `r dim(PM_exp)[1] -  dim(PM_exp_filtered)[1]` outliers.
+
+**Edit the HUGO gene symbols and Ensembl Gene IDs**
+
+Firstly, as mentioned above, some of the genes are missing Ensembl gene IDs. This is a large issue and I had lots of difficulty trying to salvage as many genes as I could that were missing the Ensembl gene IDs.
+
+First, I tried to separate the genes that were missing ensembl gene IDs from the other genes:
+```{r results = FALSE}
+na_gene_ids <- PM_exp_filtered[which(is.na(PM_exp_filtered$`Ensembl Gene ID`)), 1]
+```
+There are `r length(na_gene_ids)` genes without ensembl gene ids! I will try to improve this.
+
+I also read in the paper that they used hg19 instead of the most recent ensembl. Therefore, after some google searching, I came across (this article)[https://m.ensembl.org/info/website/tutorials/grch37.html] that states that hg19 is equivalent to Ensembl's GRCh37. As we were shown how to use Ensembl, I went with GRCh37 for all future queries.
+
+*Method 1: Match the gene names given in dataset to Ensembl IDs*
+In my dataset I was given gene ids - some of these were the same as HUGO symbols, while some were aliases or older symbols. I tried to use these to find the associated ensembl gene ids:
+```{r}
+grch37 = useMart(biomart="ENSEMBL_MART_ENSEMBL", host="grch37.ensembl.org", path="/biomart/martservice") # From https://support.bioconductor.org/p/62064/
+ensembl_grch37 = useDataset("hsapiens_gene_ensembl",mart=grch37)
+is_na <- getBM(attributes = c("wikigene_name", "ensembl_gene_id"),
+               filters = c("wikigene_name"),
+               values = na_gene_ids,
+               mart = ensembl_grch37)
+```
+I was fortunate to find `r length(is_na$wikigene_name)` of my ensembl ids. I put them back into the dataset by:
+```{r}
+for (i in 1:nrow(is_na)) {
+  gene_name <- is_na[i,]$wikigene_name
+  ensembl_gene_id <- is_na[i,]$ensembl_gene_id
+  index <- which(PM_exp_filtered$`Gene Name` == gene_name)
+  PM_exp_filtered[index,2] <- ensembl_gene_id
+}
+still_na <- na_gene_ids[which(!na_gene_ids %in% is_na$wikigene_name)] #remove all now identified gene names
+```
+
+Now, I am missing `r length(which(!na_gene_ids %in% is_na$wikigene_name))` ensembl ids.
+
+*Method 2: Use entrezgeneids on genes that begin with LOC*
+In my dataset there are quite a few genes that begin with the letters LOC. Dr. Isserlin suggested that if the LOC is removed, these ids can be used as entrez gene ids! I then separated all gene ids that began with LOC and performed a query:
+```{r}
+LOC_indexes <- grep("^LOC", still_na) # Find all gene names beginning with LOC
+LOC_names <- still_na[LOC_indexes]
+no_LOC_names <- gsub("^LOC", "", LOC_names) # Remove all of the 
+length(no_LOC_names) #362
+LOC_grch37 <- getBM(attributes = c("entrezgene_id", "ensembl_gene_id"),
+                    filters = c("entrezgene_id"),
+                    values = no_LOC_names,
+                    mart = ensembl_grch37)
+```
+
+I was able to find `r length(LOC_grch37$entrezgene_id)`. Now I will put them back into my dataset by:
+```{r}
+for (i in 1:nrow(LOC_grch37)) {
+  gene_name <- paste0("LOC", toString(LOC_grch37[i,]$entrezgene_id)) # Add back LOC that they will match with gene names
+  ensembl_gene_id <- is_na[i,]$ensembl_gene_id
+  index <- which(PM_exp_filtered$`Gene Name` == gene_name)
+  PM_exp_filtered[index,2] <- ensembl_gene_id
+}
+left_LOC_na <- no_LOC_names[which(!no_LOC_names %in% LOC_grch37$entrezgene_id)] # Find all gene names that start with LOC
+left_na <- still_na[-LOC_indexes] # Remove all gene names that start with LOC from the <NA> list
+```
+
+I am still left with `r length(left_na)` to attempt to find the ensembl gene ids for. I removed all ids that began with LOC from the list of indices I have left to check as that was the only check that would work in finding ensembl gene ids for genes beginning with LOC.
+
+*Method 3: Use list of known aliases to match with dataset gene names*
+When I was trying to find a solution to my missing ensembl ids, I came across [this website](https://www.biostars.org/p/14971/) and decided to use this as well! I will try and find proper gene names that map to my dataset's gene names, and use those to find ensembl gene ids.
+```{r}
+# To get the list of gene names and aliases
+dbCon <- org.Hs.eg_dbconn()
+sqlQuery <- 'SELECT * FROM alias, gene_info WHERE alias._id == gene_info._id;'
+aliasSymbol <- dbGetQuery(dbCon, sqlQuery)
+
+m <- matrix(ncol=2, byrow=TRUE)
+colnames(m) <- c('old_symbol', 'new_symbol') # Old symbol is our gene name, new symbol is matching gene name
+all_new_symbols <- c()
+
+for (val in left_na) {
+  if (val %in% aliasSymbol$alias_symbol) {
+    index <- which(aliasSymbol$alias_symbol == val)
+    proper_symbol <- aliasSymbol[index,]$symbol[1]
+    m <- rbind(m, c(val, proper_symbol)) #to form association b/w the two
+    all_new_symbols <- c(all_new_symbols, proper_symbol) #for next step
+  }
+}
+
+# Get the ensembl gene ids that map to the new gene names
+ensembl_w_new_names <- getBM(attributes = c("wikigene_name", "ensembl_gene_id"),
+            filters = c("wikigene_name"),
+            values = all_new_symbols,
+            mart = ensembl_grch37)
+
+
+# Now, put all of the ensembl gene IDs into the chart
+for (i in 1:nrow(ensembl_w_new_names)) {
+  gene_name <- ensembl_w_new_names[i,]$wikigene_name # The new name we matched with our gene names
+  old_gene_name <- m[which(m[,2] == gene_name)] # Gene names in our dataset
+  ensembl_gene_id <- ensembl_w_new_names[i,]$ensembl_gene_id
+  index <- which(PM_exp_filtered$`Gene Name` == old_gene_name)
+  PM_exp_filtered[index,2] <- ensembl_gene_id
+}
+```
+
+This is the last method I could find. Even though there are still some genes that are missing ensembl ids, I will leave them in as they do have some form of identificaiton, though the gene ids used may be aliases or older hugo symbols.
+
+Finally, to actually find the HUGO symbols that map to all of thse ensembl gene ids:
+```{r}
+all_HUGO <- getBM(attributes = c("ensembl_gene_id","hgnc_symbol"),
+                   filters = c("ensembl_gene_id"),
+                   values = PM_exp_filtered$`Ensembl Gene ID`,
+                   mart = ensembl_grch37)
+PM_exp_filtered$"HUGO_symbol" <- NA # Add column to dataset
+for (i in 1:nrow(all_HUGO)) {
+  ensembl_num <- all_HUGO[i,]$ensembl_gene_id
+  hugo_sym <- all_HUGO[i,]$hgnc_symbol
+  index <- which(PM_exp_filtered$`Ensembl Gene ID` == ensembl_num)
+  PM_exp_filtered$"HUGO_symbol"[index] <- hugo_sym
+}
+```
+
+Now, it is time to check for duplicates!
+```{r}
+PM_table <- data.frame(table(PM_exp_filtered$`Ensembl Gene ID`))
+all_duplicates <- PM_exp_filtered[PM_exp_filtered$`Ensembl Gene ID` %in% PM_table$Var1[PM_table$Freq > 1],] #check which ensembl ids have a higher frequency than 1, meaning they are duplicated
+length(all_duplicates$`Gene Name`) #476
+```
+
+I can see that my dataset has 476 duplicates! I want to see which of my genes are duplicates:
+
+```{r}
+gene_duplicates <- all_duplicates$`Gene Name`
+all_duplicates$`Gene Name`
+```
+ 
+ If I remember correclty, the gene names listed here look an awful lot like the list of gene names who origianlly were missing ensemble gene ids! Let's check:
+ 
+```{r}
+orig_missing_ensembl <- length(which(gene_duplicates %in% PM_exp$`Gene Name`[is.na(PM_exp$`Ensembl Gene ID`)]))
+length(which(gene_duplicates %in% PM_exp$`Gene Name`[is.na(PM_exp$`Ensembl Gene ID`)])) #406
+
+```
+ 
+ Wow! Most of the genes that are duplicates originally had no ensembl gene ids! As this is less than 3% of my dataset, I am going to leave all of these values in. I don't feel comfortable removing genes, especially when I am unsure of the fact that the genes that are duplicated are being given the correct ensembl gene ids after all the methods I had to go through!
+
+
+## Normalize the Data
+Before perfoming any normalization on my dataset, I just wanted to be able to visualize my data.
+
+I chose to use a boxplot because I found it to be the easiest representation to view the data as it showed distributions of each sample's (PM_#) values and lots of information about them in one plot (interquartile range, first and third quartiles, and outliers)
+I then used a denstiy plot as it is similar to a histogram, but you are able to easily view the distribution of data over a continuous interval of patient's expression of the genes.
+```{r echo = FALSE}
+data2plot <- log2(cpm(PM_exp_filtered[,3:40]))
+boxplot(data2plot, xlab = "Samples", ylab = "log2 CPM",
+        las = 2, cex = 0.5, cex.lab = 0.5,
+        cex.axis = 0.5, main = "Bariatric Surgery RNASeq Samples")
+```
+
+```{r echo = FALSE}
+counts_density <- apply(log2(cpm(PM_exp_filtered[,3:40])), 2, density)
+xlim <- 0; ylim <- 0
+for (i in 1:length(counts_density)) {
+  xlim <- range(c(xlim, counts_density[[i]]$x));
+  ylim <- range(c(ylim, counts_density[[i]]$y))
+}
+cols <- rainbow(length(counts_density))
+ltys <- rep(1, length(counts_density))
+p1 <- plot(counts_density[[1]], xlim=xlim, ylim=ylim, type="n",
+     ylab="Smoothing density of log2-CPM", main="", cex.lab = 0.85)
+for (i in 1:length(counts_density)) lines(counts_density[[i]], col=cols[i], lty=ltys[i])
+legend("topright", colnames(data2plot),
+       col=cols, lty=ltys, cex=0.75,
+       border ="blue",  text.col = "green4",
+       merge = TRUE, bg = "gray90")
+```
+
+Now we will normalize the data:
+```{r}
+filtered_data_matrix <- as.matrix(PM_exp_filtered[,3:40])
+rownames(filtered_data_matrix) <- PM_exp_filtered$`Ensembl Gene ID`
+d = DGEList(counts=filtered_data_matrix, group=samples$time)
+d = calcNormFactors(d)
+normalized_counts <- cpm(d)
+```
+
+A few of the normalized factors can be displayed:
+```{r echo = FALSE, results = TRUE}
+d$samples[1:5,]
+```
+
+We can see that there will be minor modifications to the dataset will be minor but will still have a slight impact (as seen from the norm.factors column. 
+```{r echo = FALSE}
+data2plot <- log2(normalized_counts)
+boxplot(data2plot, xlab = "Samples", ylab = "log2 CPM",
+        las = 2, cex = 0.5, cex.lab = 0.5,
+        cex.axis = 0.5, main = "Bariatric Surgery RNASeq Samples")
+```
+
+
+From this plot, I can automatically see that all patients, wether before or after surgery had very similar interquartile ranges, with a mean around 4. There seemed to be quite a few outliers, many on the more negative side, indicating much lower expression occurred slightly more frequently than very high expression.
+```{r echo = FALSE}
+counts_density <- apply(log2(normalized_counts), 2, density)
+xlim <- 0; ylim <- 0
+for (i in 1:length(counts_density)) {
+  xlim <- range(c(xlim, counts_density[[i]]$x));
+  ylim <- range(c(ylim, counts_density[[i]]$y))
+}
+cols <- rainbow(length(counts_density))
+ltys <- rep(1, length(counts_density))
+p2 <- plot(counts_density[[1]], xlim=xlim, ylim=ylim, type="n",
+     ylab="Smoothing density of log2-CPM", main="", cex.lab = 0.85)
+for (i in 1:length(counts_density)) lines(counts_density[[i]], col=cols[i], lty=ltys[i])
+legend("topright", colnames(data2plot),
+       col=cols, lty=ltys, cex=0.75,
+       border ="blue",  text.col = "green4",
+       merge = TRUE, bg = "gray90")
+```
+
+
+The differences between pre-normalization and post-normalization are very minimal, especially in this graph. It just seems as though the different lines indiciating different patients are tigher together, however the mean has not shifted much. It seems that most pateints gene expression hovers around 0.18, with PM02_T3 dipping slightly lower at 0.15
+
+I then created an MDS plot for the dataset to analyze similarity between each patient's conditions (before surgery and after surgery).
+```{r echo = FALSE}
+plotMDS(d, labels=rownames(samples), col = c("green","blue")[factor(samples$time)])
+model_design <- model.matrix(~samples$patients + samples$time+0)
+```
+
+
+There is some clustering of patients at both T0 and T3, like for PM21. However, there are also patients with little to no clustering, like PM13. From what I can observe, I think there may be a slight bit of clustering within a patient, however it does not seem to be too prominent, as T0 and T3 of each patient are still a slight distance apart.
+
+Next, I will look at the biological variation within the genes:
+```{r}
+d <- estimateDisp(d, model_design)
+plotBCV(d,col.tagwise = "black",col.common = "red")
+```
+
+
+The trend line (blue) approaches the common one (red) from the left side of the plot until about 0.3, in which the lines seem to overlap and follow a very similar trend. Also, the trend line never surpasses 0.5 of biological coefficient of variation, which demonstrates that my dataset does not have very much biological variation and most of my samples have similar expression of the genes.
+
+From my mean-variance plot:
+```{r}
+plotMeanVar(d, show.raw.vars = TRUE, show.tagwise.vars=TRUE,
+            show.ave.raw.vars = TRUE,
+            NBline=TRUE,
+            show.binned.common.disp.vars = TRUE)
+```
+
+
+It seems that the genes with a higher mean expression level have an increased level of variance, whereas those that have a lower mean expression have a decreased level of variance. This could be due to the fact that the larger expression level values are so larger that even a small change could be represented as a much larger variance (as we are using log10 scale).
+
+Lastly, is a MA plot:
+```{r}
+plotMA(log2(PM_exp[,c(3,4)]), ylab="M - ratio log expression", main="Bariatric Surgery: Genes Before & After")
+```
+
+
+Starting at x= 0, there seems to be lots of convering at the y = 0. This indicates that the gene values for PM01 at both T0 and T3 relative to the surgery were extremely similar, however there were some genes (where lots of (before x = 0) where either a T0 there was very little expression, whereas at T3 there was lots of expression, or vice versa. Therefore, some genes that were observed had very little difference before and after surgery, whereas other genes had large amounts of differences before and after surgery.
+
+
+## Final Coverage
+
+Lastly, it is important to see how much data I have removed from my dataset and how much is remaining:
+```{r}
+nrow(PM_exp) - nrow(PM_exp_filtered) # Filtered lost 10,271 genes
+ncol(PM_exp) - ncol(PM_exp_filtered) # Filtered gained one column
+```
+
+Unfortunately, my cleaned and filtered dataset lost 10,271 genes. This was due to filtering out low expression genes. The cleaned and filtered dataset gained a column, since now we added the column that includes hugo gene symbols.
+
+
+
+
+
