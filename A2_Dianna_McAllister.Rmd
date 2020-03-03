@@ -75,7 +75,7 @@ I have always been interested in health, and maintaining a healthy lifestyle; I 
 
 **Downloading the Dataset and initial previewing**
 
- Now that we have looked into information about the dataset, let's download my dataset!
+ Now that we have looked into information about the dataset, let's download my dataset using BiocManager[@BiocManager] and GEOmetadb[@GEOmetadb]!
 ```{r results = FALSE, message = FALSE}
 sfiles = getGEOSuppFiles('GSE66306')
 fnames = rownames(sfiles)
@@ -389,7 +389,7 @@ colnames(heatmap_matrix) <- colnames(PM_exp_filtered[,4:ncol(PM_exp_filtered)-1]
 plotMDS(heatmap_matrix, col = rep(c("darkgreen","blue"),10))
 ```
 
-As shown in the graph, there is no two clusterings of patients before (T0) surgery and after (T3) surgery as an ideal dataset would show. It seems that most patients cluster just after 0 on the x-axis, for both results of before or after surgery. This indicates that my dataset is not the most ideal dataset, as in an ideal dataset the two treatment cases (T0 and T3) are in two very separate clusters. This may just add noise to my results later on in this process.
+As shown in the graph, there is no two clusterings of patients before (T0) surgery and after (T3) surgery. It seems that most patients cluster just after 0 on the x-axis, for both results of before or after surgery. This indicates that my dataset is not the most ideal dataset, as in an ideal dataset the two treatment cases (T0 and T3) are in two very separate clusters. This may just add noise to my results later on in this process.
 
 To have a further look at my dataset, I will plot an MDS graph and analyze the clustering between each individual patient before and after surgery.
 
@@ -405,7 +405,7 @@ Now, I will begin gene expression analysis of my dataset.
 
 ## Analysis Using Limma
 
-First, I will create a linear model.
+First, I will create a linear model using Limma[@limma].
 
 ```{r}
 model_design <- model.matrix(~ samples$time)
@@ -448,13 +448,13 @@ length(which(output_hits$P.Value < 0.05))
 length(which(output_hits$adj.P.Val < 0.05))
 ```
 
-It seems that there are 223 genes that are significant before adjustment, but none after. This indicates that futher processing must be completed to get p-values that have been adjusted, that are still significant.
+It seems that there are 223 genes that are significant before adjustment, but none after. This indicates that futher processing must be completed to get p-values that have been adjusted that are still significant.
 
 **Multiple Hypothesis Testing**
 
-A method that can be used to improve the results of adjusted p-values is multiple hypothesis testing! This helps to control for patient variability, by taking both the patients' results AND the number of patients into account, instead of just the patients' results.
+A method that can be used to improve the results of the adjusted p-values is multiple hypothesis testing! This helps to control for patient variability, by taking both the patients' gene expression AND the number of patients into account, instead of just the patients' gene expression.
 
-First, the linear model needs to be updated so that it now takes into consideration the patients' results and the number of patients.
+First, the linear model needs to be updated so that it now takes into consideration the patients' gene expression and the number of patients.
 
 ```{r warning = FALSE, message = FALSE}
 model_design_pat <- model.matrix(~ samples$patients + samples$time)
@@ -493,11 +493,11 @@ Unfortunately, the results are again slightly disappointing in that there are st
 
 ## Analysis Using EdgeR
 
-When I was using Limma, I could not get any significantly diffeerentially expressed genes, before or after multiple hypothesis testing. 
+When I was using Limma, I could not get any significantly differentially expressed genes, before or after multiple hypothesis testing. 
 
-I then re-read my paper and noticed that they also performed gene diffeerential analysis, but used a different package than Limma, as the data seemed to follow a negative binomal distribution (this is why understanding the entirety of the paper is important!). Limma works well on data that follows a linear distribution, which as explained by my paper, my data does not. EdgeR is another package that can be used for differential expression, and is great for data that follows a negative binomial distribution - just like mine!
+I then re-read my paper and noticed that they also performed gene differential analysis, but used a different package than Limma, as the data seemed to follow a negative binomal distribution. Though Limma works well on data that follows a linear distribution, it should not be used by my data as my data follows a negative binomial distribution instead. EdgeR[@edgeR] is another package that can be used for differential expression, and is great for data that follows a negative binomial distribution - just like mine!
 
-I will also confirm that my data follows a negative binomial distribution:
+I will confirm that my data follows a negative binomial distribution by plotting the mean-variance graph of my data:
 
 ```{r}
 filtered_data_matrix <- as.matrix(PM_exp_filtered[,3:40])
@@ -512,7 +512,7 @@ plotMeanVar(d, show.raw.vars = TRUE, show.tagwise.vars=TRUE,
 
 The blue line in the above graph is the negative binomial line. As you can see by the red X's, my data follows the negative binomial distribution. Therefore, I can use the edgeR package on my dataset!
 
-First, I will use the edgeR glmQLFTest to fit my dataset. I will fit my dataset using the multiple hypothesis test like I did with Limma, where I used both the number of patients and the pateints' data in an attempt to control for the patients' variability.
+First, I will use the edgeR glmQLFTest to fit my dataset. I will fit my dataset using the multiple hypothesis test like I did with Limma, where I used both the number of patients and the pateints' gene expression in an attempt to control for the patients' variability.
 
 ```{r}
 #model_design_pat already is set to use both the number of patients and the patients' data
@@ -520,6 +520,7 @@ fit <- glmQLFit(d, model_design_pat)
 qlf.pos_vs_neg <- glmQLFTest(fit, coef='samples$timeT3')
 kable(topTags(qlf.pos_vs_neg), type="html")
 ```
+
 
 Next, I will check to see if there are any genes with significant gene expression using this new model.
 
@@ -531,7 +532,7 @@ length(which(qlf_output_hits$table$FDR < 0.05)) #FDR is adjusted p-values
 
 Fortunately, there are 138 genes with significant gene expression, even after adjustment!
 
-Next, I will plot the data on a heatmap, and look at the differences between patients before surgery (T0) and after surgery (T3).
+Next, I will plot the data on a heatmap[@heatmap], and look at the differences between patients before surgery (T0) and after surgery (T3).
 
 ```{r}
 top_hits <- rownames(qlf_output_hits$table)[qlf_output_hits$table$FDR<0.05] 
@@ -587,7 +588,7 @@ plot(plotVolcano, col = point.col)
 
 ## Finding Upregulated and Downregulated Genes
 
-I am going to continue to use edgeR as it allowed me to find genes that passed correction. While using edgeR, I will be finding the downregulated and upregulated genes from my dataset.
+I am going to continue to use edgeR as it allowed me to find genes that passed correction. With edgeR, I will be finding the downregulated and upregulated genes from my dataset.
 
 ```{r}
 d <- calcNormFactors(d)
@@ -600,7 +601,7 @@ length(which(qlf_output_hits$table$PValue < 0.05 & qlf_output_hits$table$logFC >
 length(which(qlf_output_hits$table$PValue < 0.05 & qlf_output_hits$table$logFC < 0))
 ```
 
-I was able to find that there are 732 upregulated genes, and 709 downregulated genes! Now I will find the ensembl gene IDs of these genes and save them in text files, which I will put into g:profiler so that I can see what datasets match those genes best.
+I was able to find that there are 732 upregulated genes, and 709 downregulated genes! Now I will find the ensembl gene IDs of these genes and save them in text files, which I will put into the g:profiler[@gprofiler] webpage so that I can see what datasets match those genes best.
 
 ```{r}
 qlf_output_hits_withgn <- merge(PM_exp_filtered[,1:2],qlf_output_hits, by.x=2, by.y = 0)
@@ -626,7 +627,7 @@ write.table(x=all_genes,
             row.names = FALSE,col.names = FALSE,quote = FALSE)
 ```
 
-Now that I have text files with all of the necessary genes, I will use these text files in g:profiler and put images of the results below.
+Now that I have text files with all of the necessary genes, I will use these text files in g:profiler. The results can be found in images below.
 
 ## Annotation Data Used
 
@@ -636,7 +637,7 @@ The annotation data sets that I used were GO biological process, Reactome, and W
 
 I used the same thresholds from when I performed gene expression analysis; again I will be looking at FDR (Benjamini-Hochberg method) that are below 0.05, as this is the usual threshold that is set for other quantifiers such as p-values.
 
-The amount of genesets from each annotation data set for each query performed are shown below.
+The amount of genesets returned from each annotation data set for each query performed are shown below.
 
 *Up-Regulation Results*
 
@@ -704,9 +705,9 @@ The paper specifies that the down-regulated genes were "enriched in metabolic fu
 
 There are other papers who perform research to observe the effects after bariatric surgery on another's body.
 
-Another [article](https://journals.sagepub.com/doi/full/10.1177/1457496913490467)[@santos2014effect] I found performed research on different aspects of patients' physical and cellular heath before and three months after bariastric surgery. The results that they found were that the patients' weight went down, and decreased neutrophil and triglyceride counts. The results that I found result the results of this paper as the genesets that were downregulated were actions of blood cells (like nutrophils), as well as breaking down cells like triglycerides. Also, my results indicate that response to heat is up-regulated, leading me to believe that the increased response to heat causes the patients to lose weight, just as the paper described.
+Another [article](https://journals.sagepub.com/doi/full/10.1177/1457496913490467)[@santos2014effect] I found performed research on different aspects of patients' physical and cellular heath before and three months after bariastric surgery. The results that they found were that the patients' weight went down, and there were decreased neutrophil and triglyceride counts. The results that I found result were similar to the results of this paper as the genesets that were downregulated were actions of blood cells (like nutrophils), as well as breaking down cells like triglycerides. Also, my results indicate that response to heat is up-regulated, leading me to believe that the increased response to heat causes the patients to lose weight, just as the paper described.
 
-There was also an [article](https://europepmc.org/article/pmc/pmc4662646)[@sparks2015impact] that reported findings on arthritic patients' health before and after bariatric surgery. The results were similar to the article above, where the pateints again lost weight, but in addition, in this article it was documented that there was a lower erythrocyte sedimentation rate. This again matches with my results, as a down-regulated gene was oxygentation and deoxygenation of blood cells, which means that erythrocyte sedimentation rate as a result will decrease since the erythrocytes ability to fall quickly.
+There was also an [article](https://europepmc.org/article/pmc/pmc4662646)[@sparks2015impact] that reported findings on arthritic patients' health before and after bariatric surgery. The results were similar to the article above, where the patients again lost weight, but in addition, in this article it was documented that there was a lower erythrocyte sedimentation rate. This again matches with my results, as a down-regulated gene was oxygentation and deoxygenation of blood cells, which means that erythrocyte sedimentation rate will decrease as a result since the erythrocytes ability to fall quickly.
 
 
 # References
